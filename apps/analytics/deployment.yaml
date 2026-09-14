@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: analytics-service
-        image: 339712930081.dkr.ecr.us-east-1.amazonaws.com/toggle-master-analytics:latest
+        image: 339712930081.dkr.ecr.us-east-1.amazonaws.com/toggle-master-analytics:v1.0.0-d7e8fbc
         resources:
           requests:
             cpu: "100m"
