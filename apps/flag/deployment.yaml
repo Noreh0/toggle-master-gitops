@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: flag-service
-        image: 339712930081.dkr.ecr.us-east-1.amazonaws.com/toggle-master-flag:latest
+        image: 339712930081.dkr.ecr.us-east-1.amazonaws.com/toggle-master-flag:v1.0.0-a62a64f
         ports:
         - containerPort: 8002
         env:
