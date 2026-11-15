@@ -1,0 +1,71 @@
+diff --git a/apps/analytics/deployment.yaml b/apps/analytics/deployment.yaml
+index b141587..98acca6 100644
+--- a/apps/analytics/deployment.yaml
++++ b/apps/analytics/deployment.yaml
+@@ -13,6 +13,7 @@ spec:
+       labels:
+         app: analytics-service
+     spec:
++      serviceAccountName: analytics-service
+       containers:
+       - name: analytics-service
+         image: 339712930081.dkr.ecr.us-east-1.amazonaws.com/toggle-master-analytics:v1.0.0-d7e8fbc
+@@ -27,6 +28,14 @@ spec:
+         - name: AWS_REGION
+           value: "us-east-1"
+         - name: AWS_SQS_URL
+-          value: "REPLACE_WITH_SQS_URL"
++          value: "https://sqs.us-east-1.amazonaws.com/339712930081/toggle-master-queue" # mesma fila do evaluation (output sqs_queue_url)
+         - name: AWS_DYNAMODB_TABLE
+-          value: "ToggleMasterAnalytics" # precisa bater exatamente com o nome criado no Terraform (modules/dynamodb)
+\ No newline at end of file
++          value: "ToggleMasterAnalytics" # precisa bater exatamente com o nome criado no Terraform (modules/dynamodb)
++---
++# Identidade AWS do pod (EKS Pod Identity). O nome precisa bater com
++# aws_eks_pod_identity_association.analytics no Terraform (modules/workload-iam).
++apiVersion: v1
++kind: ServiceAccount
++metadata:
++  name: analytics-service
++  namespace: toggle-app
+\ No newline at end of file
+diff --git a/apps/evaluation/deployment.yaml b/apps/evaluation/deployment.yaml
+index db55a7b..7dc1d36 100644
+--- a/apps/evaluation/deployment.yaml
++++ b/apps/evaluation/deployment.yaml
+@@ -13,6 +13,7 @@ spec:
+       labels:
+         app: evaluation-service
+     spec:
++      serviceAccountName: evaluation-service
+       containers:
+       - name: evaluation-service
+         image: 339712930081.dkr.ecr.us-east-1.amazonaws.com/toggle-master-evaluation:latest
+@@ -29,7 +30,10 @@ spec:
+         - name: PORT
+           value: "8004"
+         - name: REDIS_URL
+-          value: "redis://toggle-master-redis.fmvjfa.0001.use1.cache.amazonaws.com:6379" # copie do output "redis_endpoint" do terraform apply
++          valueFrom:
++            secretKeyRef:
++              name: app-secrets
++              key: REDIS_URL
+         - name: AWS_SQS_URL
+           value: "https://sqs.us-east-1.amazonaws.com/339712930081/toggle-master-queue" # copie do output "sqs_queue_url" do terraform apply
+         - name: AWS_REGION
+@@ -54,4 +58,12 @@ spec:
+   - port: 8004
+     targetPort: 8004
+   selector:
+-    app: evaluation-service
+\ No newline at end of file
++    app: evaluation-service
++---
++# Identidade AWS do pod (EKS Pod Identity). O nome precisa bater com
++# aws_eks_pod_identity_association.evaluation no Terraform (modules/workload-iam).
++apiVersion: v1
++kind: ServiceAccount
++metadata:
++  name: evaluation-service
++  namespace: toggle-app
+\ No newline at end of file
