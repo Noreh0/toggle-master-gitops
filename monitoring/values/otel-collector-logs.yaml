@@ -1,0 +1,57 @@
+# OpenTelemetry Collector "agente de logs" (DaemonSet): lê o stdout dos pods do namespace
+# toggle-app em cada node e entrega no Loki por OTLP.
+mode: daemonset
+fullnameOverride: otel-collector-logs
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+command:
+  name: otelcol-contrib
+
+presets:
+  logsCollection:
+    enabled: true
+    includeCollectorLogs: false
+  kubernetesAttributes:
+    enabled: true
+
+# Este agente só lê arquivos: nenhuma porta de recepção.
+ports:
+  otlp:
+    enabled: false
+  otlp-http:
+    enabled: false
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+
+resources:
+  requests: { cpu: 50m, memory: 96Mi }
+  limits: { memory: 256Mi }
+
+config:
+  receivers:
+    filelog:
+      # Só os pods da aplicação. Os logs da própria stack de observabilidade não interessam à demo.
+      include:
+        - /var/log/pods/toggle-app_*/*/*.log
+      start_at: end
+
+  exporters:
+    otlphttp/loki:
+      endpoint: http://loki.monitoring.svc.cluster.local:3100/otlp
+
+  service:
+    pipelines:
+      # Este agente não recebe traces nem métricas.
+      traces: null
+      metrics: null
+      logs:
+        receivers: [filelog]
+        processors: [memory_limiter, batch]
+        exporters: [otlphttp/loki]
