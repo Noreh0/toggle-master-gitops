@@ -1,0 +1,137 @@
+From 65e62fced6525f57bc0e5105934f81eb1bc2e2b3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 07:29:40 -0300
+Subject: [PATCH 2/2] =?UTF-8?q?feat(apps):=20vari=C3=A1veis=20OTEL=5F*=20n?=
+ =?UTF-8?q?os=205=20deployments=20e=20ENABLE=5FCHAOS=20no=20auth?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Os serviços enviam traces e métricas por OTLP/HTTP ao otel-collector.monitoring.svc:4318.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0143aTTEmngJvZQUbnnAAFek
+---
+ apps/analytics/deployment.yaml  | 11 +++++++++++
+ apps/auth/deployment.yaml       | 14 ++++++++++++++
+ apps/evaluation/deployment.yaml | 11 +++++++++++
+ apps/flag/deployment.yaml       | 11 +++++++++++
+ apps/targeting/deployment.yaml  | 11 +++++++++++
+ 5 files changed, 58 insertions(+)
+
+diff --git a/apps/analytics/deployment.yaml b/apps/analytics/deployment.yaml
+index 98acca6..f408440 100644
+--- a/apps/analytics/deployment.yaml
++++ b/apps/analytics/deployment.yaml
+@@ -25,6 +25,17 @@ spec:
+             cpu: "200m"
+             memory: "256Mi"
+         env:
++        # --- OpenTelemetry: tudo vai para o OTel Collector (namespace monitoring) ---
++        - name: OTEL_SERVICE_NAME
++          value: "analytics-service"
++        - name: OTEL_EXPORTER_OTLP_ENDPOINT
++          value: "http://otel-collector.monitoring.svc.cluster.local:4318"
++        - name: OTEL_EXPORTER_OTLP_PROTOCOL
++          value: "http/protobuf"
++        - name: OTEL_RESOURCE_ATTRIBUTES
++          value: "service.namespace=toggle-master,deployment.environment=demo"
++        - name: OTEL_SEMCONV_STABILITY_OPT_IN
++          value: "http"
+         - name: AWS_REGION
+           value: "us-east-1"
+         - name: AWS_SQS_URL
+diff --git a/apps/auth/deployment.yaml b/apps/auth/deployment.yaml
+index 20a0ba7..8e7c91d 100644
+--- a/apps/auth/deployment.yaml
++++ b/apps/auth/deployment.yaml
+@@ -19,6 +19,20 @@ spec:
+         ports:
+         - containerPort: 8001
+         env:
++        # --- OpenTelemetry: tudo vai para o OTel Collector (namespace monitoring) ---
++        - name: OTEL_SERVICE_NAME
++          value: "auth-service"
++        - name: OTEL_EXPORTER_OTLP_ENDPOINT
++          value: "http://otel-collector.monitoring.svc.cluster.local:4318"
++        - name: OTEL_EXPORTER_OTLP_PROTOCOL
++          value: "http/protobuf"
++        - name: OTEL_RESOURCE_ATTRIBUTES
++          value: "service.namespace=toggle-master,deployment.environment=demo"
++        - name: OTEL_SEMCONV_STABILITY_OPT_IN
++          value: "http"
++        # Habilita POST /admin/chaos (protegido pela MASTER_KEY) para a demo de auto-recuperação.
++        - name: ENABLE_CHAOS
++          value: "true"
+         - name: PORT
+           value: "8001"
+         - name: DATABASE_URL
+diff --git a/apps/evaluation/deployment.yaml b/apps/evaluation/deployment.yaml
+index 7dc1d36..d7f990a 100644
+--- a/apps/evaluation/deployment.yaml
++++ b/apps/evaluation/deployment.yaml
+@@ -27,6 +27,17 @@ spec:
+             cpu: "200m"
+             memory: "256Mi"
+         env:
++        # --- OpenTelemetry: tudo vai para o OTel Collector (namespace monitoring) ---
++        - name: OTEL_SERVICE_NAME
++          value: "evaluation-service"
++        - name: OTEL_EXPORTER_OTLP_ENDPOINT
++          value: "http://otel-collector.monitoring.svc.cluster.local:4318"
++        - name: OTEL_EXPORTER_OTLP_PROTOCOL
++          value: "http/protobuf"
++        - name: OTEL_RESOURCE_ATTRIBUTES
++          value: "service.namespace=toggle-master,deployment.environment=demo"
++        - name: OTEL_SEMCONV_STABILITY_OPT_IN
++          value: "http"
+         - name: PORT
+           value: "8004"
+         - name: REDIS_URL
+diff --git a/apps/flag/deployment.yaml b/apps/flag/deployment.yaml
+index c6deafe..94445dc 100644
+--- a/apps/flag/deployment.yaml
++++ b/apps/flag/deployment.yaml
+@@ -19,6 +19,17 @@ spec:
+         ports:
+         - containerPort: 8002
+         env:
++        # --- OpenTelemetry: tudo vai para o OTel Collector (namespace monitoring) ---
++        - name: OTEL_SERVICE_NAME
++          value: "flag-service"
++        - name: OTEL_EXPORTER_OTLP_ENDPOINT
++          value: "http://otel-collector.monitoring.svc.cluster.local:4318"
++        - name: OTEL_EXPORTER_OTLP_PROTOCOL
++          value: "http/protobuf"
++        - name: OTEL_RESOURCE_ATTRIBUTES
++          value: "service.namespace=toggle-master,deployment.environment=demo"
++        - name: OTEL_SEMCONV_STABILITY_OPT_IN
++          value: "http"
+         - name: PORT
+           value: "8002"
+         - name: DATABASE_URL
+diff --git a/apps/targeting/deployment.yaml b/apps/targeting/deployment.yaml
+index 1600f16..226c339 100644
+--- a/apps/targeting/deployment.yaml
++++ b/apps/targeting/deployment.yaml
+@@ -19,6 +19,17 @@ spec:
+         ports:
+         - containerPort: 8003
+         env:
++        # --- OpenTelemetry: tudo vai para o OTel Collector (namespace monitoring) ---
++        - name: OTEL_SERVICE_NAME
++          value: "targeting-service"
++        - name: OTEL_EXPORTER_OTLP_ENDPOINT
++          value: "http://otel-collector.monitoring.svc.cluster.local:4318"
++        - name: OTEL_EXPORTER_OTLP_PROTOCOL
++          value: "http/protobuf"
++        - name: OTEL_RESOURCE_ATTRIBUTES
++          value: "service.namespace=toggle-master,deployment.environment=demo"
++        - name: OTEL_SEMCONV_STABILITY_OPT_IN
++          value: "http"
+         - name: PORT
+           value: "8003"
+         - name: DATABASE_URL
+-- 
+2.43.0
+
