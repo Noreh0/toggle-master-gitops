@@ -1,0 +1,94 @@
+# OpenTelemetry Collector "gateway": o hub de telemetria.
+#
+#   apps (OTLP/HTTP :4318) --> este Collector --+--> Prometheus (remote write)  métricas
+#                                               +--> New Relic (OTLP)           traces / APM
+#                                               +--> Loki (OTLP)                logs recebidos por OTLP
+#
+# Os logs dos pods (stdout) são coletados por outro Collector, o de logs (DaemonSet),
+# que também entrega no Loki. Serviço para os apps: otel-collector.monitoring.svc:4318
+mode: deployment
+replicaCount: 1
+fullnameOverride: otel-collector
+
+# A imagem "contrib" tem o prometheusremotewrite, o spanmetrics e o k8sattributes.
+image:
+  repository: otel/opentelemetry-collector-contrib
+command:
+  name: otelcol-contrib
+
+presets:
+  # Acrescenta o k8s.pod.name / k8s.namespace.name / k8s.deployment.name nos dados
+  # (e cria o RBAC necessário).
+  kubernetesAttributes:
+    enabled: true
+
+extraEnvs:
+  - name: NEW_RELIC_LICENSE_KEY
+    valueFrom:
+      secretKeyRef:
+        name: newrelic-license # Secret criado pelo scripts/bootstrap.sh
+        key: NEW_RELIC_LICENSE_KEY
+
+# Só OTLP é usado; as portas jaeger/zipkin do chart ficam fechadas.
+ports:
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 512Mi }
+
+config:
+  receivers:
+    otlp:
+      protocols:
+        http:
+          endpoint: 0.0.0.0:4318
+        grpc:
+          endpoint: 0.0.0.0:4317
+
+  connectors:
+    # Gera métricas RED a partir dos spans (traces_span_metrics_calls_total e
+    # traces_span_metrics_duration_milliseconds_*). É a base do painel de taxa de requisições
+    # e do alerta de 5xx: um span SERVER com status ERROR é uma resposta 5xx, e isso vale
+    # igual para os 5 serviços, independentemente da versão da semconv de cada SDK.
+    spanmetrics:
+      metrics_flush_interval: 15s
+      histogram:
+        explicit:
+          buckets: [5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2500ms, 5s]
+
+  exporters:
+    prometheusremotewrite:
+      endpoint: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090/api/v1/write
+      resource_to_telemetry_conversion:
+        enabled: true # service.name vira o label service_name no Prometheus
+      target_info:
+        enabled: false
+    otlphttp/newrelic:
+      endpoint: https://otlp.nr-data.net # conta US
+      headers:
+        api-key: ${env:NEW_RELIC_LICENSE_KEY}
+    otlphttp/loki:
+      endpoint: http://loki.monitoring.svc.cluster.local:3100/otlp
+
+  service:
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [spanmetrics, otlphttp/newrelic]
+      metrics:
+        receivers: [otlp, spanmetrics]
+        processors: [memory_limiter, batch]
+        exporters: [prometheusremotewrite]
+      logs:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [otlphttp/loki]
