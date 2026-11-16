@@ -1,0 +1,30 @@
+# Manifestos puros da observabilidade: dashboard do Grafana e provisionamento de alertas.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring-extras
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Noreh0/toggle-master-gitops.git
+    targetRevision: main
+    path: monitoring/manifests
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 20s
+        factor: 2
+        maxDuration: 5m
