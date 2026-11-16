@@ -19,6 +19,17 @@ spec:
         ports:
         - containerPort: 8002
         env:
+        # --- OpenTelemetry: tudo vai para o OTel Collector (namespace monitoring) ---
+        - name: OTEL_SERVICE_NAME
+          value: "flag-service"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.monitoring.svc.cluster.local:4318"
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: "http/protobuf"
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: "service.namespace=toggle-master,deployment.environment=demo"
+        - name: OTEL_SEMCONV_STABILITY_OPT_IN
+          value: "http"
         - name: PORT
           value: "8002"
         - name: DATABASE_URL
