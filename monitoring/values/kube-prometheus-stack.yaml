@@ -1,0 +1,97 @@
+# kube-prometheus-stack: Prometheus + Grafana + kube-state-metrics + node-exporter.
+# Versões dos charts ficam nas Applications (monitoring/applications/).
+fullnameOverride: kube-prometheus-stack
+
+# O alerta fica no Grafana (Grafana Alerting -> PagerDuty/Discord/webhook de auto-recuperação),
+# então o Alertmanager não é necessário.
+alertmanager:
+  enabled: false
+
+# EKS gerenciado não expõe etcd/scheduler/controller-manager/kube-proxy: desligar evita
+# targets permanentemente "down".
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+defaultRules:
+  create: true
+  rules:
+    alertmanager: false
+    etcd: false
+    kubeScheduler: false
+    kubeControllerManager: false
+    kubeProxy: false
+
+prometheusOperator:
+  # Sem o webhook de admissão não há Jobs de certgen (que dão atrito com o ArgoCD).
+  admissionWebhooks:
+    enabled: false
+  tls:
+    enabled: false
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+prometheus:
+  prometheusSpec:
+    # O OTel Collector envia as métricas dos apps por remote write (OTLP -> Prometheus).
+    enableRemoteWriteReceiver: true
+    # Enxerga ServiceMonitor/PodMonitor/regras de qualquer namespace, não só os do Helm release.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    retention: 12h
+    # Sem storageSpec => emptyDir. O cluster não tem o driver EBS CSI e a stack é descartável
+    # (terraform destroy no fim da demo), então os dados efêmeros são intencionais.
+    resources:
+      requests: { cpu: 200m, memory: 768Mi }
+      limits: { memory: 1536Mi }
+
+kube-state-metrics:
+  resources:
+    requests: { cpu: 25m, memory: 64Mi }
+    limits: { memory: 192Mi }
+
+prometheus-node-exporter:
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { memory: 96Mi }
+
+grafana:
+  enabled: true
+  # Usuário/senha vêm do Secret "grafana-admin" criado pelo scripts/bootstrap.sh (nada no Git).
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  # Chaves do PagerDuty/Discord/GitHub usadas nos contact points (Secret criado pelo bootstrap).
+  # No provisionamento use $__env{NOME_DA_VARIAVEL}.
+  envFromSecrets:
+    - name: grafana-alerting-secrets
+      optional: true
+  defaultDashboardsTimezone: browser
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+    datasources:
+      uid: prometheus
+  additionalDataSources:
+    - name: Loki
+      uid: loki
+      type: loki
+      access: proxy
+      url: http://loki.monitoring.svc.cluster.local:3100
+      jsonData:
+        maxLines: 1000
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 384Mi }

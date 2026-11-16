@@ -1,0 +1,581 @@
+From 779c688ce9e0fae208781515db3d77c197866123 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 07:29:40 -0300
+Subject: [PATCH 1/2] feat(monitoring): stack de observabilidade via ArgoCD
+ (Prometheus, Grafana, Loki, OTel Collector)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Applications em monitoring/applications (charts Helm + values deste repo)
+- OTel Collector gateway (OTLP -> Prometheus remote write, New Relic, Loki; spanmetrics)
+- OTel Collector de logs (DaemonSet, filelog do namespace toggle-app -> Loki)
+- Prometheus com remote write receiver, Grafana com datasource Loki, armazenamento efêmero
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0143aTTEmngJvZQUbnnAAFek
+---
+ monitoring/README.md                          | 34 +++++++
+ .../applications/kube-prometheus-stack.yaml   | 34 +++++++
+ monitoring/applications/loki.yaml             | 33 +++++++
+ .../applications/otel-collector-logs.yaml     | 33 +++++++
+ monitoring/applications/otel-collector.yaml   | 33 +++++++
+ monitoring/values/kube-prometheus-stack.yaml  | 97 +++++++++++++++++++
+ monitoring/values/loki.yaml                   | 72 ++++++++++++++
+ monitoring/values/otel-collector-gateway.yaml | 94 ++++++++++++++++++
+ monitoring/values/otel-collector-logs.yaml    | 57 +++++++++++
+ 9 files changed, 487 insertions(+)
+ create mode 100644 monitoring/README.md
+ create mode 100644 monitoring/applications/kube-prometheus-stack.yaml
+ create mode 100644 monitoring/applications/loki.yaml
+ create mode 100644 monitoring/applications/otel-collector-logs.yaml
+ create mode 100644 monitoring/applications/otel-collector.yaml
+ create mode 100644 monitoring/values/kube-prometheus-stack.yaml
+ create mode 100644 monitoring/values/loki.yaml
+ create mode 100644 monitoring/values/otel-collector-gateway.yaml
+ create mode 100644 monitoring/values/otel-collector-logs.yaml
+
+diff --git a/monitoring/README.md b/monitoring/README.md
+new file mode 100644
+index 0000000..17d68f2
+--- /dev/null
++++ b/monitoring/README.md
+@@ -0,0 +1,34 @@
++# Observabilidade (Fase 4)
++
++Tudo aqui é entregue pelo ArgoCD. A Application `monitoring` (repo da aplicação, `argocd/monitoring.yaml`)
++aponta para `monitoring/applications/`, que contém as Applications filhas (charts Helm com os values deste repo).
++
++```
++apps (OTLP/HTTP :4318)
++   │
++   ▼
++OTel Collector "gateway" (Deployment) ──► Prometheus (remote write)   métricas dos apps + RED gerado dos spans
++                                      ├─► New Relic (OTLP)            traces / APM / Service Map
++                                      └─► Loki (OTLP)                 logs recebidos por OTLP
++
++stdout dos pods toggle-app ──► OTel Collector "logs" (DaemonSet, filelog) ──► Loki
++Prometheus + Loki ──► Grafana (dashboards e alertas) ──► PagerDuty / Discord / GitHub Actions (auto-reparo)
++```
++
++| Application | Chart | Values |
++|---|---|---|
++| `kube-prometheus-stack` | prometheus-community/kube-prometheus-stack 88.4.0 | `values/kube-prometheus-stack.yaml` |
++| `loki` | grafana-community/loki 18.7.6 | `values/loki.yaml` |
++| `otel-collector` | open-telemetry/opentelemetry-collector 0.148.0 | `values/otel-collector-gateway.yaml` |
++| `otel-collector-logs` | open-telemetry/opentelemetry-collector 0.148.0 | `values/otel-collector-logs.yaml` |
++
++Decisões:
++- **Armazenamento efêmero** (emptyDir) em Prometheus e Loki: o cluster não tem o driver EBS CSI e a stack é
++  descartável junto com o `terraform destroy`.
++- **Alertmanager desligado**: o alerta é do Grafana Alerting.
++- **Métricas RED vêm do conector `spanmetrics`** do Collector (`traces_span_metrics_*`): um span SERVER com
++  status ERROR é uma resposta 5xx, igual nos 5 serviços, qualquer que seja a versão da semconv de cada SDK.
++- **Segredos nunca ficam no Git**: o `scripts/bootstrap.sh` (repo da aplicação) cria os Secrets
++  `newrelic-license`, `grafana-admin` e `grafana-alerting-secrets` no namespace `monitoring`.
++
++As Applications apontam para a branch **main** deste repo: faça o merge antes de subir o cluster.
+diff --git a/monitoring/applications/kube-prometheus-stack.yaml b/monitoring/applications/kube-prometheus-stack.yaml
+new file mode 100644
+index 0000000..957e697
+--- /dev/null
++++ b/monitoring/applications/kube-prometheus-stack.yaml
+@@ -0,0 +1,34 @@
++apiVersion: argoproj.io/v1alpha1
++kind: Application
++metadata:
++  name: kube-prometheus-stack
++  namespace: argocd
++spec:
++  project: default
++  sources:
++    - repoURL: https://prometheus-community.github.io/helm-charts
++      chart: kube-prometheus-stack
++      targetRevision: 88.4.0
++      helm:
++        releaseName: kube-prometheus-stack
++        valueFiles:
++          - $values/monitoring/values/kube-prometheus-stack.yaml
++    - repoURL: https://github.com/Noreh0/toggle-master-gitops.git
++      targetRevision: main
++      ref: values
++  destination:
++    server: https://kubernetes.default.svc
++    namespace: monitoring
++  syncPolicy:
++    automated:
++      prune: true
++      selfHeal: true
++    syncOptions:
++      - CreateNamespace=true
++      - ServerSideApply=true # os CRDs do Prometheus Operator estouram o limite de annotation do apply comum
++    retry:
++      limit: 10
++      backoff:
++        duration: 20s
++        factor: 2
++        maxDuration: 5m
+diff --git a/monitoring/applications/loki.yaml b/monitoring/applications/loki.yaml
+new file mode 100644
+index 0000000..9b8ce39
+--- /dev/null
++++ b/monitoring/applications/loki.yaml
+@@ -0,0 +1,33 @@
++apiVersion: argoproj.io/v1alpha1
++kind: Application
++metadata:
++  name: loki
++  namespace: argocd
++spec:
++  project: default
++  sources:
++    - repoURL: https://grafana-community.github.io/helm-charts
++      chart: loki
++      targetRevision: 18.7.6
++      helm:
++        releaseName: loki
++        valueFiles:
++          - $values/monitoring/values/loki.yaml
++    - repoURL: https://github.com/Noreh0/toggle-master-gitops.git
++      targetRevision: main
++      ref: values
++  destination:
++    server: https://kubernetes.default.svc
++    namespace: monitoring
++  syncPolicy:
++    automated:
++      prune: true
++      selfHeal: true
++    syncOptions:
++      - CreateNamespace=true
++    retry:
++      limit: 10
++      backoff:
++        duration: 20s
++        factor: 2
++        maxDuration: 5m
+diff --git a/monitoring/applications/otel-collector-logs.yaml b/monitoring/applications/otel-collector-logs.yaml
+new file mode 100644
+index 0000000..48a4f03
+--- /dev/null
++++ b/monitoring/applications/otel-collector-logs.yaml
+@@ -0,0 +1,33 @@
++apiVersion: argoproj.io/v1alpha1
++kind: Application
++metadata:
++  name: otel-collector-logs
++  namespace: argocd
++spec:
++  project: default
++  sources:
++    - repoURL: https://open-telemetry.github.io/opentelemetry-helm-charts
++      chart: opentelemetry-collector
++      targetRevision: 0.148.0
++      helm:
++        releaseName: otel-collector-logs
++        valueFiles:
++          - $values/monitoring/values/otel-collector-logs.yaml
++    - repoURL: https://github.com/Noreh0/toggle-master-gitops.git
++      targetRevision: main
++      ref: values
++  destination:
++    server: https://kubernetes.default.svc
++    namespace: monitoring
++  syncPolicy:
++    automated:
++      prune: true
++      selfHeal: true
++    syncOptions:
++      - CreateNamespace=true
++    retry:
++      limit: 10
++      backoff:
++        duration: 20s
++        factor: 2
++        maxDuration: 5m
+diff --git a/monitoring/applications/otel-collector.yaml b/monitoring/applications/otel-collector.yaml
+new file mode 100644
+index 0000000..69bafd6
+--- /dev/null
++++ b/monitoring/applications/otel-collector.yaml
+@@ -0,0 +1,33 @@
++apiVersion: argoproj.io/v1alpha1
++kind: Application
++metadata:
++  name: otel-collector
++  namespace: argocd
++spec:
++  project: default
++  sources:
++    - repoURL: https://open-telemetry.github.io/opentelemetry-helm-charts
++      chart: opentelemetry-collector
++      targetRevision: 0.148.0
++      helm:
++        releaseName: otel-collector
++        valueFiles:
++          - $values/monitoring/values/otel-collector-gateway.yaml
++    - repoURL: https://github.com/Noreh0/toggle-master-gitops.git
++      targetRevision: main
++      ref: values
++  destination:
++    server: https://kubernetes.default.svc
++    namespace: monitoring
++  syncPolicy:
++    automated:
++      prune: true
++      selfHeal: true
++    syncOptions:
++      - CreateNamespace=true
++    retry:
++      limit: 10
++      backoff:
++        duration: 20s
++        factor: 2
++        maxDuration: 5m
+diff --git a/monitoring/values/kube-prometheus-stack.yaml b/monitoring/values/kube-prometheus-stack.yaml
+new file mode 100644
+index 0000000..5d3e25e
+--- /dev/null
++++ b/monitoring/values/kube-prometheus-stack.yaml
+@@ -0,0 +1,97 @@
++# kube-prometheus-stack: Prometheus + Grafana + kube-state-metrics + node-exporter.
++# Versões dos charts ficam nas Applications (monitoring/applications/).
++fullnameOverride: kube-prometheus-stack
++
++# O alerta fica no Grafana (Grafana Alerting -> PagerDuty/Discord/webhook de auto-recuperação),
++# então o Alertmanager não é necessário.
++alertmanager:
++  enabled: false
++
++# EKS gerenciado não expõe etcd/scheduler/controller-manager/kube-proxy: desligar evita
++# targets permanentemente "down".
++kubeEtcd:
++  enabled: false
++kubeScheduler:
++  enabled: false
++kubeControllerManager:
++  enabled: false
++kubeProxy:
++  enabled: false
++
++defaultRules:
++  create: true
++  rules:
++    alertmanager: false
++    etcd: false
++    kubeScheduler: false
++    kubeControllerManager: false
++    kubeProxy: false
++
++prometheusOperator:
++  # Sem o webhook de admissão não há Jobs de certgen (que dão atrito com o ArgoCD).
++  admissionWebhooks:
++    enabled: false
++  tls:
++    enabled: false
++  resources:
++    requests: { cpu: 50m, memory: 64Mi }
++    limits: { memory: 256Mi }
++
++prometheus:
++  prometheusSpec:
++    # O OTel Collector envia as métricas dos apps por remote write (OTLP -> Prometheus).
++    enableRemoteWriteReceiver: true
++    # Enxerga ServiceMonitor/PodMonitor/regras de qualquer namespace, não só os do Helm release.
++    serviceMonitorSelectorNilUsesHelmValues: false
++    podMonitorSelectorNilUsesHelmValues: false
++    ruleSelectorNilUsesHelmValues: false
++    probeSelectorNilUsesHelmValues: false
++    retention: 12h
++    # Sem storageSpec => emptyDir. O cluster não tem o driver EBS CSI e a stack é descartável
++    # (terraform destroy no fim da demo), então os dados efêmeros são intencionais.
++    resources:
++      requests: { cpu: 200m, memory: 768Mi }
++      limits: { memory: 1536Mi }
++
++kube-state-metrics:
++  resources:
++    requests: { cpu: 25m, memory: 64Mi }
++    limits: { memory: 192Mi }
++
++prometheus-node-exporter:
++  resources:
++    requests: { cpu: 25m, memory: 32Mi }
++    limits: { memory: 96Mi }
++
++grafana:
++  enabled: true
++  # Usuário/senha vêm do Secret "grafana-admin" criado pelo scripts/bootstrap.sh (nada no Git).
++  admin:
++    existingSecret: grafana-admin
++    userKey: admin-user
++    passwordKey: admin-password
++  # Chaves do PagerDuty/Discord/GitHub usadas nos contact points (Secret criado pelo bootstrap).
++  # No provisionamento use $__env{NOME_DA_VARIAVEL}.
++  envFromSecrets:
++    - name: grafana-alerting-secrets
++      optional: true
++  defaultDashboardsTimezone: browser
++  sidecar:
++    dashboards:
++      enabled: true
++      label: grafana_dashboard
++      labelValue: "1"
++      searchNamespace: ALL
++    datasources:
++      uid: prometheus
++  additionalDataSources:
++    - name: Loki
++      uid: loki
++      type: loki
++      access: proxy
++      url: http://loki.monitoring.svc.cluster.local:3100
++      jsonData:
++        maxLines: 1000
++  resources:
++    requests: { cpu: 50m, memory: 128Mi }
++    limits: { memory: 384Mi }
+diff --git a/monitoring/values/loki.yaml b/monitoring/values/loki.yaml
+new file mode 100644
+index 0000000..4d45208
+--- /dev/null
++++ b/monitoring/values/loki.yaml
+@@ -0,0 +1,72 @@
++# Loki em modo Monolithic (um único pod), armazenamento em filesystem efêmero.
++# Chart: grafana-community/loki (o chart grafana/loki foi descontinuado; ver versão na Application).
++deploymentMode: Monolithic
++
++loki:
++  auth_enabled: false
++  commonConfig:
++    replication_factor: 1 # com 1 réplica, qualquer outro valor faz as escritas falharem
++  storage:
++    type: filesystem
++  schemaConfig:
++    configs:
++      - from: "2024-04-01"
++        store: tsdb
++        object_store: filesystem
++        schema: v13
++        index:
++          prefix: loki_index_
++          period: 24h
++  limits_config:
++    # Necessário para a ingestão nativa por OTLP (o OTel Collector envia para /otlp).
++    allow_structured_metadata: true
++    volume_enabled: true
++
++singleBinary:
++  replicas: 1
++  persistence:
++    enabled: false # emptyDir: o cluster não tem EBS CSI e os logs da demo são descartáveis
++  resources:
++    requests: { cpu: 100m, memory: 256Mi }
++    limits: { memory: 768Mi }
++
++# Componentes que não existem no modo Monolithic ou pesam sem necessidade nesta demo.
++gateway:
++  enabled: false
++chunksCache:
++  enabled: false
++resultsCache:
++  enabled: false
++lokiCanary:
++  enabled: false
++test:
++  enabled: false
++minio:
++  enabled: false
++
++backend:
++  replicas: 0
++read:
++  replicas: 0
++write:
++  replicas: 0
++ingester:
++  replicas: 0
++querier:
++  replicas: 0
++queryFrontend:
++  replicas: 0
++queryScheduler:
++  replicas: 0
++distributor:
++  replicas: 0
++compactor:
++  replicas: 0
++indexGateway:
++  replicas: 0
++bloomPlanner:
++  replicas: 0
++bloomBuilder:
++  replicas: 0
++bloomGateway:
++  replicas: 0
+diff --git a/monitoring/values/otel-collector-gateway.yaml b/monitoring/values/otel-collector-gateway.yaml
+new file mode 100644
+index 0000000..3198c65
+--- /dev/null
++++ b/monitoring/values/otel-collector-gateway.yaml
+@@ -0,0 +1,94 @@
++# OpenTelemetry Collector "gateway": o hub de telemetria.
++#
++#   apps (OTLP/HTTP :4318) --> este Collector --+--> Prometheus (remote write)  métricas
++#                                               +--> New Relic (OTLP)           traces / APM
++#                                               +--> Loki (OTLP)                logs recebidos por OTLP
++#
++# Os logs dos pods (stdout) são coletados por outro Collector, o de logs (DaemonSet),
++# que também entrega no Loki. Serviço para os apps: otel-collector.monitoring.svc:4318
++mode: deployment
++replicaCount: 1
++fullnameOverride: otel-collector
++
++# A imagem "contrib" tem o prometheusremotewrite, o spanmetrics e o k8sattributes.
++image:
++  repository: otel/opentelemetry-collector-contrib
++command:
++  name: otelcol-contrib
++
++presets:
++  # Acrescenta o k8s.pod.name / k8s.namespace.name / k8s.deployment.name nos dados
++  # (e cria o RBAC necessário).
++  kubernetesAttributes:
++    enabled: true
++
++extraEnvs:
++  - name: NEW_RELIC_LICENSE_KEY
++    valueFrom:
++      secretKeyRef:
++        name: newrelic-license # Secret criado pelo scripts/bootstrap.sh
++        key: NEW_RELIC_LICENSE_KEY
++
++# Só OTLP é usado; as portas jaeger/zipkin do chart ficam fechadas.
++ports:
++  jaeger-compact:
++    enabled: false
++  jaeger-thrift:
++    enabled: false
++  jaeger-grpc:
++    enabled: false
++  zipkin:
++    enabled: false
++
++resources:
++  requests: { cpu: 100m, memory: 256Mi }
++  limits: { memory: 512Mi }
++
++config:
++  receivers:
++    otlp:
++      protocols:
++        http:
++          endpoint: 0.0.0.0:4318
++        grpc:
++          endpoint: 0.0.0.0:4317
++
++  connectors:
++    # Gera métricas RED a partir dos spans (traces_span_metrics_calls_total e
++    # traces_span_metrics_duration_milliseconds_*). É a base do painel de taxa de requisições
++    # e do alerta de 5xx: um span SERVER com status ERROR é uma resposta 5xx, e isso vale
++    # igual para os 5 serviços, independentemente da versão da semconv de cada SDK.
++    spanmetrics:
++      metrics_flush_interval: 15s
++      histogram:
++        explicit:
++          buckets: [5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2500ms, 5s]
++
++  exporters:
++    prometheusremotewrite:
++      endpoint: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090/api/v1/write
++      resource_to_telemetry_conversion:
++        enabled: true # service.name vira o label service_name no Prometheus
++      target_info:
++        enabled: false
++    otlphttp/newrelic:
++      endpoint: https://otlp.nr-data.net # conta US
++      headers:
++        api-key: ${env:NEW_RELIC_LICENSE_KEY}
++    otlphttp/loki:
++      endpoint: http://loki.monitoring.svc.cluster.local:3100/otlp
++
++  service:
++    pipelines:
++      traces:
++        receivers: [otlp]
++        processors: [memory_limiter, batch]
++        exporters: [spanmetrics, otlphttp/newrelic]
++      metrics:
++        receivers: [otlp, spanmetrics]
++        processors: [memory_limiter, batch]
++        exporters: [prometheusremotewrite]
++      logs:
++        receivers: [otlp]
++        processors: [memory_limiter, batch]
++        exporters: [otlphttp/loki]
+diff --git a/monitoring/values/otel-collector-logs.yaml b/monitoring/values/otel-collector-logs.yaml
+new file mode 100644
+index 0000000..816bf2f
+--- /dev/null
++++ b/monitoring/values/otel-collector-logs.yaml
+@@ -0,0 +1,57 @@
++# OpenTelemetry Collector "agente de logs" (DaemonSet): lê o stdout dos pods do namespace
++# toggle-app em cada node e entrega no Loki por OTLP.
++mode: daemonset
++fullnameOverride: otel-collector-logs
++
++image:
++  repository: otel/opentelemetry-collector-contrib
++command:
++  name: otelcol-contrib
++
++presets:
++  logsCollection:
++    enabled: true
++    includeCollectorLogs: false
++  kubernetesAttributes:
++    enabled: true
++
++# Este agente só lê arquivos: nenhuma porta de recepção.
++ports:
++  otlp:
++    enabled: false
++  otlp-http:
++    enabled: false
++  jaeger-compact:
++    enabled: false
++  jaeger-thrift:
++    enabled: false
++  jaeger-grpc:
++    enabled: false
++  zipkin:
++    enabled: false
++
++resources:
++  requests: { cpu: 50m, memory: 96Mi }
++  limits: { memory: 256Mi }
++
++config:
++  receivers:
++    filelog:
++      # Só os pods da aplicação. Os logs da própria stack de observabilidade não interessam à demo.
++      include:
++        - /var/log/pods/toggle-app_*/*/*.log
++      start_at: end
++
++  exporters:
++    otlphttp/loki:
++      endpoint: http://loki.monitoring.svc.cluster.local:3100/otlp
++
++  service:
++    pipelines:
++      # Este agente não recebe traces nem métricas.
++      traces: null
++      metrics: null
++      logs:
++        receivers: [filelog]
++        processors: [memory_limiter, batch]
++        exporters: [otlphttp/loki]
+-- 
+2.43.0
+
