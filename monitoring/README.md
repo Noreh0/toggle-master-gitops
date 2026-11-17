@@ -21,6 +21,7 @@ Prometheus + Loki ──► Grafana (dashboards e alertas) ──► PagerDuty /
 | `loki` | grafana-community/loki 18.7.6 | `values/loki.yaml` |
 | `otel-collector` | open-telemetry/opentelemetry-collector 0.148.0 | `values/otel-collector-gateway.yaml` |
 | `otel-collector-logs` | open-telemetry/opentelemetry-collector 0.148.0 | `values/otel-collector-logs.yaml` |
+| `monitoring-extras` | manifestos puros | `manifests/` (dashboard e provisionamento de alertas) |
 
 Decisões:
 - **Armazenamento efêmero** (emptyDir) em Prometheus e Loki: o cluster não tem o driver EBS CSI e a stack é
@@ -32,3 +33,11 @@ Decisões:
   `newrelic-license`, `grafana-admin` e `grafana-alerting-secrets` no namespace `monitoring`.
 
 As Applications apontam para a branch **main** deste repo: faça o merge antes de subir o cluster.
+
+## Dashboard e alerta
+- **Dashboard** "ToggleMaster - Visão geral" (`manifests/dashboards/`): requisições/s, erros 5xx, latência p95, recursos
+  do cluster (CPU/memória de pods e nodes, idade dos pods) e logs em tempo real do Loki.
+- **Alerta** (`manifests/alerting/`): `auth-service` com mais de 5% de respostas 5xx (avaliado a cada 30 s, `for` 30 s)
+  -> contact point `oncall` = incidente no PagerDuty + aviso no Discord + webhook que dispara o workflow
+  `self-heal.yaml` (repo da aplicação), que executa `kubectl rollout restart`.
+- Os segredos dos contact points entram por variáveis de ambiente (Secret `grafana-alerting-secrets`).

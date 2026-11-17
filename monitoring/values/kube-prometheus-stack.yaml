@@ -84,6 +84,15 @@ grafana:
       searchNamespace: ALL
     datasources:
       uid: prometheus
+      # Carrega os datasources antes do Grafana subir, para o provisionamento de alertas já
+      # encontrar o uid "prometheus".
+      initDatasources: true
+  # Regra de alerta, contact points e política (ConfigMap em monitoring/manifests/alerting).
+  extraConfigmapMounts:
+    - name: alerting-provisioning
+      mountPath: /etc/grafana/provisioning/alerting
+      configMap: grafana-alerting-provisioning
+      readOnly: true
   additionalDataSources:
     - name: Loki
       uid: loki
