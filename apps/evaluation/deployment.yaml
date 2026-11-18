@@ -16,7 +16,7 @@ spec:
       serviceAccountName: evaluation-service
       containers:
       - name: evaluation-service
-        image: 339712930081.dkr.ecr.us-east-1.amazonaws.com/toggle-master-evaluation:latest
+        image: 339712930081.dkr.ecr.us-east-1.amazonaws.com/toggle-master-evaluation:v1.0.0-a2dc77c
         ports:
         - containerPort: 8004
         resources: # Importante para o HPA conseguir medir uso de CPU depois!
