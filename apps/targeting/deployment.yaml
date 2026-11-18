@@ -32,6 +32,8 @@ spec:
           value: "http"
         - name: PORT
           value: "8003"
+        - name: AUTH_SERVICE_URL
+          value: "http://auth-service:8001"
         - name: DATABASE_URL
           valueFrom:
             secretKeyRef:
